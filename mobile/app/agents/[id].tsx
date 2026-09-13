@@ -17,6 +17,17 @@ import { colors } from '../../src/theme';
 
 const api = isMockMode ? mockAPI : httpAPI;
 
+function messageTimestamp(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export default function AgentScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -38,6 +49,10 @@ export default function AgentScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const newestFirstMessages = [...messages].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+  );
 
   return (
     <View style={s.container}>
@@ -93,7 +108,7 @@ export default function AgentScreen() {
           </View>
         ) : (
           <View style={s.threadContainer}>
-            {messages.map(m => {
+            {newestFirstMessages.map(m => {
               const isAI = m.role === 'assistant';
               return (
                 <View key={m.id} style={[s.thread, !isAI && s.threadSelf]}>
@@ -109,7 +124,7 @@ export default function AgentScreen() {
                         {isAI ? 'NEWSROOM AI' : 'YOU'}
                       </Text>
                       <Text style={[s.time, !isAI && s.timeSelf]}>
-                        {new Date(m.createdAt).toLocaleDateString()}
+                        {messageTimestamp(m.createdAt)}
                       </Text>
                     </View>
 

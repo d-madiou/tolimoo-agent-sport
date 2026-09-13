@@ -11,7 +11,7 @@ import {
   View,
   Platform
 } from 'react-native';
-import { Agent } from '../src/types/api';
+import { Agent, Message } from '../src/types/api';
 import { httpAPI } from '../src/services/api';
 import { isMockMode, mockAPI } from '../src/services/mock-api';
 import { leagues } from '../src/leagues';
@@ -21,6 +21,7 @@ const api = isMockMode ? mockAPI : httpAPI;
 
 export default function Home() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [sportsMessages, setSportsMessages] = useState<Message[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [all, setAll] = useState(false);
@@ -34,7 +35,12 @@ export default function Home() {
   const load = useCallback(async () => {
     try {
       setError('');
-      setAgents(await api.listAgents());
+      const [loadedAgents, allSports] = await Promise.all([
+        api.listAgents(),
+        api.listMessages('all_sports').catch(() => []),
+      ]);
+      setAgents(loadedAgents);
+      setSportsMessages(allSports);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unable to connect.');
     } finally {
@@ -73,6 +79,10 @@ export default function Home() {
   };
 
   const feed = all ? leagues : leagues.filter(league => agentFor(league));
+  const sportsDrafts = sportsMessages
+    .filter((message): message is Message & { draft: NonNullable<Message['draft']> } => Boolean(message.draft))
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .slice(0, 8);
 
   return (
     <View style={s.container}>
@@ -121,6 +131,21 @@ export default function Home() {
             </View>
           )}
 
+          {!all && sportsDrafts.length > 0 && (
+            <View style={s.carouselSection}>
+              <View style={s.carouselHeading}><Text style={s.carouselLabel}>ALL SPORTS · LATEST</Text><Text style={s.carouselHint}>Swipe</Text></View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.carouselRail}>
+                {sportsDrafts.map(message => {
+                  const imageURL = message.draft.sources.find(source => source.imageUrl)?.imageUrl;
+                  return <Link key={message.id} href={{ pathname: '/agents/[id]', params: { id: 'all_sports' } }} asChild><Pressable style={s.storyCard}>
+                    {imageURL ? <Image source={{ uri: imageURL }} style={s.storyImage} /> : <View style={s.storyFallback}><Text style={s.storyFallbackText}>SPORTS</Text></View>}
+                    <View style={s.storyOverlay}><Text numberOfLines={3} style={s.storyTitle}>{message.draft.headline}</Text><Text style={s.storyMeta}>{message.draft.claimStatus.toUpperCase()}</Text></View>
+                  </Pressable></Link>;
+                })}
+              </ScrollView>
+            </View>
+          )}
+
           <View style={s.tabs}>
             <Pressable
               onPress={() => setAll(false)}
@@ -158,9 +183,9 @@ export default function Home() {
               </View>
               <Text style={s.assignLabel}>RESEARCH INTERVAL</Text>
               <View style={s.options}>
-                {[60, 300, 1800, 3600].map(value => (
+                {[30, 60, 300, 1800, 3600].map(value => (
                   <Pressable key={value} onPress={() => setInterval(value)} style={[s.option, interval === value && s.optionActive]}>
-                    <Text style={[s.optionText, interval === value && s.optionTextActive]}>{value < 3600 ? value / 60 + 'm' : '1h'}</Text>
+                    <Text style={[s.optionText, interval === value && s.optionTextActive]}>{value < 60 ? value + 's' : value < 3600 ? value / 60 + 'm' : '1h'}</Text>
                   </Pressable>
                 ))}
               </View>
@@ -405,6 +430,18 @@ const s = StyleSheet.create({
     color: '#0F172A',
     letterSpacing: -0.3,
   },
+  carouselSection: { marginBottom: 22 },
+  carouselHeading: { paddingHorizontal: 24, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between' },
+  carouselLabel: { color: '#DF301C', fontSize: 11, fontWeight: '900', letterSpacing: 1 },
+  carouselHint: { color: '#94A3B8', fontSize: 11, fontWeight: '700' },
+  carouselRail: { paddingHorizontal: 16, gap: 12 },
+  storyCard: { width: 238, height: 150, borderRadius: 18, overflow: 'hidden', backgroundColor: '#0F172A', justifyContent: 'flex-end' },
+  storyImage: { ...StyleSheet.absoluteFillObject, width: undefined, height: undefined },
+  storyFallback: { ...StyleSheet.absoluteFillObject, backgroundColor: '#DF301C', alignItems: 'center', justifyContent: 'center' },
+  storyFallbackText: { color: '#FFFFFF', fontSize: 18, fontWeight: '900', letterSpacing: 1 },
+  storyOverlay: { padding: 13, backgroundColor: 'rgba(15,23,42,0.78)', gap: 5 },
+  storyTitle: { color: '#FFFFFF', fontSize: 14, lineHeight: 18, fontWeight: '900' },
+  storyMeta: { color: '#FF9100', fontSize: 9, letterSpacing: 1, fontWeight: '900' },
   feedContainer: {
     paddingHorizontal: 16,
   },
