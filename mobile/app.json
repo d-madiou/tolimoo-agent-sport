@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Signal",
+    "slug": "signal-news",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": { "supportsTablet": true },
+    "android": { "adaptiveIcon": { "backgroundColor": "#246bfe" } }
+  }
+}
