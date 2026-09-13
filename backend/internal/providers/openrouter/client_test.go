@@ -3,6 +3,7 @@ package openrouter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -22,11 +23,14 @@ func TestDraftUsesConfiguredModelAndValidatesJSON(t *testing.T) {
 		if body["model"] != "vendor/model" {
 			t.Fatalf("model = %#v", body["model"])
 		}
+		if body["max_tokens"] != float64(4096) {
+			t.Fatalf("max_tokens = %#v", body["max_tokens"])
+		}
 		format := body["response_format"].(map[string]any)
 		if format["type"] != "json_schema" {
 			t.Fatalf("response format = %#v", format)
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"outcome\":\"nothing_new\",\"reason\":\"No evidence\",\"drafts\":[]}"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"outcome\":\"nothing_new\",\"reason\":\"No evidence\",\"drafts\":[]}"}}],"usage":{"prompt_tokens":21,"completion_tokens":13,"total_tokens":34}}`))
 	}))
 	defer server.Close()
 	client := New("test-key", "vendor/model", server.Client())
@@ -47,7 +51,24 @@ func TestDraftRejectsMalformedModelJSON(t *testing.T) {
 	defer server.Close()
 	client := New("key", "vendor/model", server.Client())
 	client.BaseURL = server.URL
-	if _, err := client.Draft(context.Background(), "assignment", nil, nil); err == nil {
-		t.Fatal("expected model JSON error")
+	if _, err := client.Draft(context.Background(), "assignment", nil, nil); !errors.Is(err, ErrMalformedJSON) {
+		t.Fatalf("expected malformed JSON error, got %v", err)
+	}
+}
+
+func TestDraftRejectsTokenLimitedOutputBeforeJSONDecoding(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"length","message":{"content":"{\"outcome\":\"drafts\""}}],"usage":{"prompt_tokens":100,"completion_tokens":4096,"total_tokens":4196}}`))
+	}))
+	defer server.Close()
+	client := New("key", "vendor/model", server.Client())
+	client.BaseURL = server.URL
+	if _, err := client.Draft(context.Background(), "assignment", nil, nil); !errors.Is(err, ErrTruncatedOutput) {
+		t.Fatalf("expected truncated output error, got %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("truncated output made %d requests, want 1", requests)
 	}
 }

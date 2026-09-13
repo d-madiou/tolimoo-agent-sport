@@ -19,7 +19,7 @@ type fakeResearcher struct {
 	block   <-chan struct{}
 }
 
-func (f fakeResearcher) Search(ctx context.Context, _ string) ([]domain.SourceEvidence, error) {
+func (f fakeResearcher) Search(ctx context.Context, _ string, _ int) ([]domain.SourceEvidence, error) {
 	if f.block != nil {
 		select {
 		case <-f.block:
@@ -115,6 +115,16 @@ func TestWorkflowRejectsInventedSourceID(t *testing.T) {
 	}
 }
 
+func TestWorkflowRejectsOfficialSourceOutsideDraftEvidence(t *testing.T) {
+	workflow := agent.Workflow{
+		Researcher: fakeResearcher{sources: []domain.SourceEvidence{testSource(), {URL: "https://example.com/other", Title: "Other", RetrievedAt: time.Now().UTC(), Content: "Other evidence."}}},
+		Writer:     fakeWriter{assessment: domain.Assessment{Outcome: "final"}, output: domain.FinalOutput{Outcome: "drafts", Drafts: []domain.DraftCandidate{{Headline: "Titre", ClaimStatus: "official", FacebookText: "Texte Facebook", XText: "Texte X", SourceIDs: []string{"source_1"}, OfficialSourceIDs: []string{"source_2"}}}}},
+	}
+	if _, err := workflow.Run(context.Background(), "Premier League news", nil, map[string]bool{}); err == nil {
+		t.Fatal("expected official source outside draft evidence to fail")
+	}
+}
+
 func TestDuplicateActiveRunsArePrevented(t *testing.T) {
 	db := testDatabase(t)
 	release := make(chan struct{})
@@ -124,6 +134,22 @@ func TestDuplicateActiveRunsArePrevented(t *testing.T) {
 	}
 	if _, err := queue.enqueue("premier_league"); !errors.Is(err, errActiveRun) {
 		t.Fatalf("error = %v, want active run conflict", err)
+	}
+	close(release)
+}
+
+func TestRunEndpointReturnsConflictForDuplicateActiveRun(t *testing.T) {
+	db := testDatabase(t)
+	release := make(chan struct{})
+	queue := newWorkflowQueue(t, db, fakeResearcher{block: release}, fakeWriter{})
+	handler := newAPI(db, nil, testLogger(), queue)
+	first := request(t, handler, "POST", "/api/v1/agents/premier_league/runs", "")
+	if first.Code != 202 {
+		t.Fatalf("first run status = %d", first.Code)
+	}
+	second := request(t, handler, "POST", "/api/v1/agents/premier_league/runs", "")
+	if second.Code != 409 || !strings.Contains(second.Body.String(), `"conflict"`) {
+		t.Fatalf("unexpected conflict response: %d %s", second.Code, second.Body.String())
 	}
 	close(release)
 }

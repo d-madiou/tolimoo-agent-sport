@@ -21,6 +21,7 @@ import (
 
 	_ "modernc.org/sqlite"
 	"newsroom/internal/agent"
+	appconfig "newsroom/internal/config"
 	"newsroom/internal/providers/exa"
 	"newsroom/internal/providers/openrouter"
 	"newsroom/migrations"
@@ -30,6 +31,7 @@ type config struct {
 	appEnv, addr, dbPath                         string
 	cors                                         []string
 	exaAPIKey, openRouterAPIKey, openRouterModel string
+	openRouterMaxOutputTokens                    int
 	schedulerEnabled                             bool
 	runTimeout                                   time.Duration
 	queueCapacity                                int
@@ -55,23 +57,32 @@ func loadConfig() (config, error) {
 	if err != nil || queueCapacity < 1 {
 		return config{}, fmt.Errorf("AGENT_QUEUE_CAPACITY must be a positive integer")
 	}
+	openRouterMaxOutputTokens, err := strconv.Atoi(env("OPENROUTER_MAX_OUTPUT_TOKENS", "4096"))
+	if err != nil || openRouterMaxOutputTokens < 1 {
+		return config{}, fmt.Errorf("OPENROUTER_MAX_OUTPUT_TOKENS must be a positive integer")
+	}
 	origins := strings.Split(env("CORS_ALLOWED_ORIGINS", "http://localhost:8081,http://localhost:19006"), ",")
 	return config{
-		appEnv:           env("APP_ENV", "development"),
-		addr:             env("HTTP_ADDR", ":8080"),
-		dbPath:           env("DATABASE_PATH", "./data/newsroom.db"),
-		cors:             origins,
-		exaAPIKey:        os.Getenv("EXA_API_KEY"),
-		openRouterAPIKey: os.Getenv("OPENROUTER_API_KEY"),
-		openRouterModel:  os.Getenv("OPENROUTER_MODEL"),
-		schedulerEnabled: schedulerEnabled,
-		runTimeout:       runTimeout,
-		queueCapacity:    queueCapacity,
+		appEnv:                    env("APP_ENV", "development"),
+		addr:                      env("HTTP_ADDR", ":8080"),
+		dbPath:                    env("DATABASE_PATH", "./data/newsroom.db"),
+		cors:                      origins,
+		exaAPIKey:                 os.Getenv("EXA_API_KEY"),
+		openRouterAPIKey:          os.Getenv("OPENROUTER_API_KEY"),
+		openRouterModel:           os.Getenv("OPENROUTER_MODEL"),
+		schedulerEnabled:          schedulerEnabled,
+		runTimeout:                runTimeout,
+		queueCapacity:             queueCapacity,
+		openRouterMaxOutputTokens: openRouterMaxOutputTokens,
 	}, nil
 }
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	if _, err := appconfig.LoadDotEnv(); err != nil {
+		log.Error("load local environment", "error", err)
+		os.Exit(1)
+	}
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Error("load configuration", "error", err)
@@ -104,7 +115,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	configured := cfg.exaAPIKey != "" && cfg.openRouterAPIKey != "" && cfg.openRouterModel != ""
-	workflow := agent.Workflow{Researcher: exa.New(cfg.exaAPIKey, nil), Writer: openrouter.New(cfg.openRouterAPIKey, cfg.openRouterModel, nil)}
+	writer := openrouter.New(cfg.openRouterAPIKey, cfg.openRouterModel, nil)
+	writer.MaxOutputTokens = cfg.openRouterMaxOutputTokens
+	writer.Logger = log
+	workflow := agent.Workflow{Researcher: exa.New(cfg.exaAPIKey, nil), Writer: writer}
 	queue := newRunQueue(ctx, repo, workflow, cfg.runTimeout, cfg.queueCapacity, configured, log)
 
 	h := newAPI(db, cfg.cors, log, queue)

@@ -3,9 +3,11 @@ package exa
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestSearchUsesOfficialExaShapeAndBoundsResults(t *testing.T) {
@@ -17,7 +19,7 @@ func TestSearchUsesOfficialExaShapeAndBoundsResults(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["numResults"].(float64) != 5 || body["category"] != "news" {
+		if body["numResults"].(float64) != 3 || body["category"] != "news" {
 			t.Fatalf("unexpected search body: %#v", body)
 		}
 		contents := body["contents"].(map[string]any)
@@ -33,7 +35,7 @@ func TestSearchUsesOfficialExaShapeAndBoundsResults(t *testing.T) {
 	defer server.Close()
 	client := New("test-key", server.Client())
 	client.BaseURL = server.URL
-	sources, err := client.Search(context.Background(), "Premier League news")
+	sources, err := client.Search(context.Background(), "Premier League news", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +49,56 @@ func TestSearchRejectsMalformedResponse(t *testing.T) {
 	defer server.Close()
 	client := New("key", server.Client())
 	client.BaseURL = server.URL
-	if _, err := client.Search(context.Background(), "query"); err == nil {
+	if _, err := client.Search(context.Background(), "query", 3); err == nil {
 		t.Fatal("expected malformed response error")
 	}
+}
+
+func TestSearchKeepsMissingPublicationDateNil(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"title":"Undated","url":"https://example.com/undated","text":"evidence"}]}`))
+	}))
+	defer server.Close()
+	client := New("key", server.Client())
+	client.BaseURL = server.URL
+	sources, err := client.Search(context.Background(), "query", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].PublishedAt != nil {
+		t.Fatalf("missing publication date was not preserved as nil")
+	}
+}
+
+func TestSearchReportsAuthenticationAndCancellation(t *testing.T) {
+	t.Run("authentication", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+		defer server.Close()
+		client := New("key", server.Client())
+		client.BaseURL = server.URL
+		client.MaxAttempts = 1
+		if _, err := client.Search(context.Background(), "query", 1); err == nil || err.Error() != "Exa authentication failed (HTTP 401)" {
+			t.Fatalf("unexpected authentication error: %v", err)
+		}
+	})
+	t.Run("cancellation", func(t *testing.T) {
+		client := New("key", &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			<-request.Context().Done()
+			return nil, request.Context().Err()
+		})})
+		client.BaseURL = "http://exa.test"
+		client.MaxAttempts = 1
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		_, err := client.Search(ctx, "query", 1)
+		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected cancellation error, got %v", err)
+		}
+	})
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
 }

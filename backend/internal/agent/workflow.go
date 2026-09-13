@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"newsroom/internal/domain"
@@ -17,7 +18,7 @@ const (
 )
 
 type Researcher interface {
-	Search(context.Context, string) ([]domain.SourceEvidence, error)
+	Search(context.Context, string, int) ([]domain.SourceEvidence, error)
 }
 type Writer interface {
 	Assess(context.Context, string, []domain.SourceEvidence, []domain.StoryHistory) (domain.Assessment, error)
@@ -39,7 +40,10 @@ func (w Workflow) Run(ctx context.Context, assignment string, history []domain.S
 	if w.Researcher == nil || w.Writer == nil {
 		return Result{}, fmt.Errorf("research providers are not configured")
 	}
-	sources, err := w.Researcher.Search(ctx, assignment+" current developments")
+	now := time.Now().UTC()
+	windowStart := now.Add(-7 * 24 * time.Hour).Format("2006-01-02")
+	query := fmt.Sprintf("%s recent developments from %s through %s UTC", assignment, windowStart, now.Format("2006-01-02"))
+	sources, err := w.Researcher.Search(ctx, query, 5)
 	if err != nil {
 		return Result{}, fmt.Errorf("initial research: %w", err)
 	}
@@ -52,7 +56,7 @@ func (w Workflow) Run(ctx context.Context, assignment string, history []domain.S
 		return Result{NothingNew: true, Reason: conciseReason(assessment.Reason)}, nil
 	}
 	if assessment.Outcome == "follow_up" {
-		more, err := w.Researcher.Search(ctx, assessment.FollowUpQuery)
+		more, err := w.Researcher.Search(ctx, assessment.FollowUpQuery, 5)
 		if err != nil {
 			return Result{}, fmt.Errorf("follow-up research: %w", err)
 		}
@@ -143,9 +147,21 @@ func validateDraft(draft domain.DraftCandidate, sources map[string]domain.Source
 			if _, ok := sources[id]; !ok {
 				return fmt.Errorf("model referenced unknown official source ID %q", id)
 			}
+			if !containsID(draft.SourceIDs, id) {
+				return fmt.Errorf("official source ID %q is not listed in the draft evidence", id)
+			}
 		}
 	}
 	return nil
+}
+
+func containsID(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeURL(raw string) string {

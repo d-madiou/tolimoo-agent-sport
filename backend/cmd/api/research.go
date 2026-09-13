@@ -93,7 +93,6 @@ func (r repository) historyAndURLs() ([]domain.StoryHistory, map[string]bool, er
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
 	history := []domain.StoryHistory{}
 	for rows.Next() {
 		var item domain.StoryHistory
@@ -103,6 +102,10 @@ func (r repository) historyAndURLs() ([]domain.StoryHistory, map[string]bool, er
 		history = append(history, item)
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, nil, err
+	}
+	if err := rows.Close(); err != nil {
 		return nil, nil, err
 	}
 	rows, err = r.db.Query(`SELECT url FROM sources ORDER BY retrieved_at DESC LIMIT 100`)

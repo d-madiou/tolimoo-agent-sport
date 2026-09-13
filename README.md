@@ -1,6 +1,6 @@
 # Private AI Sports Newsroom
 
-Mobile-first scaffold for a solo sports journalist. The backend owns persistence, API contracts, and future research/orchestration; the Expo team owns the mobile UI. Real Exa, OpenRouter, scheduling, and social publishing are intentionally deferred.
+Mobile-first newsroom for a solo sports journalist. The backend owns persistence, API contracts, and the manually triggered Exa/OpenRouter research path; the Expo team owns the mobile UI. Scheduling and social publishing remain deferred.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ cp mobile/.env.example mobile/.env
 cd mobile && npm install && npm start
 ```
 
-The Go process reads environment variables from its shell; `.env` is a template and is not loaded automatically. Export it with your preferred dotenv tool or `set -a; . backend/.env; set +a`. Expo reads `EXPO_PUBLIC_*` variables from its environment. Never put secrets in the mobile environment.
+The Go commands load local backend configuration from `.env` when started from `backend/`, or from `backend/.env` when started from the repository root. Existing process environment variables take precedence, including explicitly empty values. Expo reads `EXPO_PUBLIC_*` variables from its environment. Never put secrets in the mobile environment.
 
 Backend configuration defaults are:
 
@@ -28,6 +28,7 @@ Backend configuration defaults are:
 - `DATABASE_PATH=./data/newsroom.db` — SQLite file path; startup never deletes an existing database.
 - `CORS_ALLOWED_ORIGINS=http://localhost:8081,http://localhost:19006` — comma-separated allowed browser origins.
 - `EXA_API_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` — required together to trigger manual research; startup remains available without them.
+- `OPENROUTER_MAX_OUTPUT_TOKENS=4096` — maximum completion-token budget for draft generation; token-limited completions are rejected rather than saved as partial JSON.
 - `AGENT_SCHEDULER_ENABLED=false` — reserved scheduler flag; scheduling is currently disabled.
 - `AGENT_RUN_TIMEOUT=2m` — total time limit for one manually triggered research run.
 - `AGENT_QUEUE_CAPACITY=8` — bounded number of queued runs awaiting the single worker.
@@ -46,10 +47,35 @@ Implemented: `GET /health`, `GET /api/v1/agents`, `GET /api/v1/agents/{id}/messa
 
 ```sh
 curl -X POST http://localhost:8080/api/v1/agents/premier_league/runs
+curl http://localhost:8080/api/v1/agents
 curl http://localhost:8080/api/v1/agents/premier_league/messages
 ```
 
-Each run is limited to two Exa searches, five results per search, three model calls, two drafts, and `AGENT_RUN_TIMEOUT`. Source URLs are normalized for basic exact-repeat detection and recent story summaries are supplied to the model; this does not guarantee semantic deduplication. X text is validated with an approximate 280-Unicode-character limit. Posting editorial messages and patching drafts remain deferred.
+Each run starts with a current UTC date and a seven-day recent-news window, is limited to two Exa searches, five results per search, three model calls, two drafts, and `AGENT_RUN_TIMEOUT`. Source URLs are normalized for basic exact-repeat detection and recent story summaries are supplied to the model; this does not guarantee semantic deduplication. X text is validated with an approximate 280-Unicode-character limit. Posting editorial messages and patching drafts remain deferred.
+
+## Exa research check
+
+Use this developer command to make one bounded Exa search (three results maximum). It prints only source titles, URLs, publication dates, and text lengths—never article text or credentials. It needs only `EXA_API_KEY`; OpenRouter configuration is not required.
+
+```sh
+cd backend
+go run ./cmd/research-check -query "latest Premier League developments"
+
+# Or from the repository root:
+go run ./backend/cmd/research-check -query "latest Premier League developments"
+```
+
+## OpenRouter draft check
+
+This isolated developer command makes one OpenRouter `Draft` request with one clearly fictional source. It makes no Exa request and never publishes anything. It requires `OPENROUTER_API_KEY` and `OPENROUTER_MODEL`; validated output is printed as indented JSON only when it contains one or two labeled fictional drafts.
+
+```sh
+cd backend
+go run ./cmd/openrouter-check
+
+# Or from the repository root:
+go run ./backend/cmd/openrouter-check
+```
 
 See [docs/api-contract.md](docs/api-contract.md) and [docs/architecture.md](docs/architecture.md).
 

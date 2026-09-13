@@ -56,7 +56,7 @@ Only one queued or running run is allowed per agent. An active assignment return
 {"error":{"code":"not_implemented","message":"This operation is not implemented yet."}}
 ```
 
-Intended behavior: starting research accepts `{}` and returns `202 {"run":{"id":"run-1","agentId":"premier_league","status":"queued","startedAt":"...","endedAt":null,"error":null}}`; an already queued/running assignment returns `409`. Posting `{ "text":"Corrige ce titre" }` persists a user message and may initiate a revision. Draft patch accepts any of `{ "facebookText":"..." }`, `{ "xText":"..." }`, `{ "reviewStatus":"approved" }`, or rejected status; approval only changes internal review state and never publishes.
+Intended deferred behavior: posting `{ "text":"Corrige ce titre" }` persists a user message and may initiate a revision. Draft patch accepts any of `{ "facebookText":"..." }`, `{ "xText":"..." }`, `{ "reviewStatus":"approved" }`, or rejected status; approval only changes internal review state and never publishes.
 
 Errors consistently use `{ "error": { "code": "...", "message": "..." } }`; common codes are `not_found` (404), `invalid_request` (400), `conflict` (409), `not_implemented` (501), and `internal_error` (500).
 

@@ -17,24 +17,33 @@ import (
 const defaultBaseURL = "https://api.exa.ai"
 
 type Client struct {
-	APIKey  string
-	BaseURL string
-	HTTP    *http.Client
+	APIKey      string
+	BaseURL     string
+	HTTP        *http.Client
+	MaxAttempts int
 }
 
 func New(apiKey string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &Client{APIKey: apiKey, BaseURL: defaultBaseURL, HTTP: httpClient}
+	return &Client{APIKey: apiKey, BaseURL: defaultBaseURL, HTTP: httpClient, MaxAttempts: 2}
 }
 
-func (c *Client) Search(ctx context.Context, query string) ([]domain.SourceEvidence, error) {
+// Search retrieves up to limit normalized sources. Page text is untrusted data
+// and must never be treated as instructions by callers.
+func (c *Client) Search(ctx context.Context, query string, limit int) ([]domain.SourceEvidence, error) {
 	if strings.TrimSpace(c.APIKey) == "" {
 		return nil, fmt.Errorf("Exa API key is not configured")
 	}
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("Exa query is required")
+	}
+	if limit < 1 || limit > 5 {
+		return nil, fmt.Errorf("Exa result limit must be between 1 and 5")
+	}
 	body := map[string]any{
-		"query": query, "type": "auto", "category": "news", "numResults": 5,
+		"query": query, "type": "auto", "category": "news", "numResults": limit,
 		"contents": map[string]any{
 			"highlights": map[string]any{"query": query, "maxCharacters": 1200},
 			"text":       map[string]any{"maxCharacters": 4000},
@@ -66,7 +75,7 @@ func (c *Client) Search(ctx context.Context, query string) ([]domain.SourceEvide
 			content = strings.Join(result.Highlights, "\n") + "\n" + content
 		}
 		results = append(results, domain.SourceEvidence{URL: result.URL, Title: result.Title, PublishedAt: publishedAt, RetrievedAt: time.Now().UTC(), Content: truncate(content, 6000)})
-		if len(results) == 5 {
+		if len(results) == limit {
 			break
 		}
 	}
@@ -86,7 +95,11 @@ func (c *Client) doJSON(ctx context.Context, path string, payload []byte, dst an
 		baseURL = defaultBaseURL
 	}
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	attempts := c.MaxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(payload))
 		if err != nil {
 			return err
@@ -106,14 +119,14 @@ func (c *Client) doJSON(ctx context.Context, path string, payload []byte, dst an
 				}
 				return nil
 			}
-			lastErr = fmt.Errorf("Exa returned HTTP %d", resp.StatusCode)
+			lastErr = exaStatusError(resp.StatusCode)
 			if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
 				return lastErr
 			}
 		} else {
 			lastErr = fmt.Errorf("call Exa: %w", err)
 		}
-		if attempt == 0 {
+		if attempt+1 < attempts {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -122,6 +135,17 @@ func (c *Client) doJSON(ctx context.Context, path string, payload []byte, dst an
 		}
 	}
 	return lastErr
+}
+
+func exaStatusError(status int) error {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fmt.Errorf("Exa authentication failed (HTTP %d)", status)
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("Exa rate limit reached (HTTP %d)", status)
+	default:
+		return fmt.Errorf("Exa returned HTTP %d", status)
+	}
 }
 
 func truncate(value string, limit int) string {
