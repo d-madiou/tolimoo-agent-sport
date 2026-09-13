@@ -1,2 +1,2 @@
 import { Stack } from 'expo-router';
-export default function Layout() { return <Stack><Stack.Screen name="index" options={{ title: 'Newsroom' }} /><Stack.Screen name="agents/[id]" options={{ title: 'Conversation' }} /></Stack>; }
+export default function Layout() { return <Stack screenOptions={{ headerStyle: { backgroundColor: '#FFFFFF' }, headerTintColor: '#101828', headerTitleStyle: { fontWeight: '700' }, contentStyle: { backgroundColor: '#F7F8FC' } }}><Stack.Screen name="index" options={{ title: 'Newsroom' }} /><Stack.Screen name="agents/[id]" options={{ title: 'Recherche & brouillons' }} /></Stack>; }

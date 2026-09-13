@@ -1,1 +1,9 @@
-{"expo":{"name":"Newsroom","slug":"newsroom-mobile","scheme":"newsroom","plugins":["expo-router"],"experiments":{"typedRoutes":true}}}
+{
+  "expo": {
+    "name": "Newsroom",
+    "slug": "newsroom-mobile",
+    "scheme": "newsroom",
+    "plugins": ["expo-router"],
+    "experiments": { "typedRoutes": true }
+  }
+}
