@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 	"newsroom/internal/agent"
@@ -120,6 +122,20 @@ func main() {
 	writer.Logger = log
 	workflow := agent.Workflow{Researcher: exa.New(cfg.exaAPIKey, nil), Writer: writer}
 	queue := newRunQueue(ctx, repo, workflow, cfg.runTimeout, cfg.queueCapacity, configured, log)
+	var scheduler *scheduler
+	if cfg.schedulerEnabled {
+		if !configured {
+			log.Warn("automatic scheduling disabled because research providers are not configured")
+		} else {
+			scheduler, err = newScheduler(ctx, repo, queue, log)
+			if err != nil {
+				log.Error("start scheduler", "error", err)
+				queue.stop(context.Background())
+				os.Exit(1)
+			}
+			log.Info("automatic research scheduling enabled")
+		}
+	}
 
 	h := newAPI(db, cfg.cors, log, queue)
 	server := &http.Server{Addr: cfg.addr, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
@@ -133,6 +149,9 @@ func main() {
 	<-ctx.Done()
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if scheduler != nil {
+		scheduler.stop()
+	}
 	queue.stop(shutdown)
 	_ = server.Shutdown(shutdown)
 }
@@ -277,10 +296,157 @@ func (a *api) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) >= 3 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "drafts" && r.Method == "PATCH" {
-		notImplemented(w)
+		if len(parts) != 4 || parts[3] == "" {
+			jsonError(w, http.StatusNotFound, "not_found", "Route not found.")
+			return
+		}
+		a.patchDraft(w, r, parts[3])
 		return
 	}
 	jsonError(w, 404, "not_found", "Route not found.")
+}
+
+type draftPatch struct {
+	headline, facebookText, xText, reviewStatus *string
+}
+
+func (a *api) patchDraft(w http.ResponseWriter, r *http.Request, rawID string) {
+	draftID, err := url.PathUnescape(rawID)
+	if err != nil || strings.TrimSpace(draftID) == "" {
+		jsonError(w, http.StatusBadRequest, "invalid_request", "Invalid draft identifier.")
+		return
+	}
+	patch, err := decodeDraftPatch(r.Body)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	_, err = a.applyDraftPatch(draftID, patch)
+	if errors.Is(err, sql.ErrNoRows) {
+		jsonError(w, http.StatusNotFound, "not_found", "Draft not found.")
+		return
+	}
+	if err != nil {
+		a.log.Error("update draft", "draft_id", draftID, "error", err)
+		jsonError(w, http.StatusInternalServerError, "database_error", "Could not update draft.")
+		return
+	}
+	draft, err := a.draftPayload(draftID)
+	if err != nil {
+		a.log.Error("read updated draft", "draft_id", draftID, "error", err)
+		jsonError(w, http.StatusInternalServerError, "database_error", "Could not read updated draft.")
+		return
+	}
+	jsonResponse(w, http.StatusOK, map[string]any{"draft": draft})
+}
+
+func decodeDraftPatch(body io.Reader) (draftPatch, error) {
+	var raw map[string]json.RawMessage
+	decoder := json.NewDecoder(body)
+	if err := decoder.Decode(&raw); err != nil {
+		return draftPatch{}, fmt.Errorf("Request body must be a JSON object.")
+	}
+	if raw == nil || len(raw) == 0 {
+		return draftPatch{}, fmt.Errorf("Request body must include at least one editable field.")
+	}
+	if err := ensureEOF(decoder); err != nil {
+		return draftPatch{}, fmt.Errorf("Request body must contain one JSON object.")
+	}
+	patch := draftPatch{}
+	for field, value := range raw {
+		parsed, err := requiredPatchString(field, value)
+		if err != nil {
+			return draftPatch{}, err
+		}
+		switch field {
+		case "headline":
+			patch.headline = &parsed
+		case "facebookText":
+			patch.facebookText = &parsed
+		case "xText":
+			if utf8.RuneCountInString(parsed) > 280 {
+				return draftPatch{}, fmt.Errorf("xText must be 280 Unicode characters or fewer.")
+			}
+			patch.xText = &parsed
+		case "reviewStatus":
+			if parsed != "pending" && parsed != "approved" && parsed != "rejected" {
+				return draftPatch{}, fmt.Errorf("reviewStatus must be pending, approved, or rejected.")
+			}
+			patch.reviewStatus = &parsed
+		default:
+			return draftPatch{}, fmt.Errorf("Unknown field %q.", field)
+		}
+	}
+	return patch, nil
+}
+
+func requiredPatchString(field string, raw json.RawMessage) (string, error) {
+	if string(raw) == "null" {
+		return "", fmt.Errorf("%s must not be null.", field)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("%s must be a string.", field)
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s must not be blank.", field)
+	}
+	return value, nil
+}
+
+func ensureEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
+func (a *api) applyDraftPatch(draftID string, patch draftPatch) (bool, error) {
+	tx, err := a.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	rollback := func(cause error) (bool, error) { _ = tx.Rollback(); return false, cause }
+	var headline, facebookText, xText, reviewStatus string
+	if err := tx.QueryRow(`SELECT headline, facebook_text, x_text, review_status FROM drafts WHERE id=?`, draftID).Scan(&headline, &facebookText, &xText, &reviewStatus); err != nil {
+		return rollback(err)
+	}
+	updatedHeadline, updatedFacebook, updatedX, updatedStatus := headline, facebookText, xText, reviewStatus
+	textEdited := patch.headline != nil || patch.facebookText != nil || patch.xText != nil
+	if patch.headline != nil {
+		updatedHeadline = *patch.headline
+	}
+	if patch.facebookText != nil {
+		updatedFacebook = *patch.facebookText
+	}
+	if patch.xText != nil {
+		updatedX = *patch.xText
+	}
+	if patch.reviewStatus != nil {
+		updatedStatus = *patch.reviewStatus
+	} else if textEdited && reviewStatus != "pending" {
+		updatedStatus = "pending"
+	}
+	if updatedHeadline == headline && updatedFacebook == facebookText && updatedX == xText && updatedStatus == reviewStatus {
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`UPDATE drafts SET headline=?, facebook_text=?, x_text=?, review_status=?, updated_at=? WHERE id=?`, updatedHeadline, updatedFacebook, updatedX, updatedStatus, now, draftID); err != nil {
+		return rollback(err)
+	}
+	if updatedHeadline != headline {
+		if _, err := tx.Exec(`UPDATE messages SET text=? WHERE draft_id=? AND message_type='draft'`, updatedHeadline, draftID); err != nil {
+			return rollback(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 func (a *api) agents(w http.ResponseWriter, r *http.Request, rest []string) {
 	if len(rest) == 0 && r.Method == "GET" {

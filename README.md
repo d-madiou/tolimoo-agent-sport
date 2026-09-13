@@ -1,6 +1,6 @@
 # Private AI Sports Newsroom
 
-Mobile-first newsroom for a solo sports journalist. The backend owns persistence, API contracts, and the manually triggered Exa/OpenRouter research path; the Expo team owns the mobile UI. Scheduling and social publishing remain deferred.
+Mobile-first newsroom for a solo sports journalist. The backend owns persistence, API contracts, and the Exa/OpenRouter research path; the Expo team owns the mobile UI. Social publishing remains deferred.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ Backend configuration defaults are:
 - `CORS_ALLOWED_ORIGINS=http://localhost:8081,http://localhost:19006` — comma-separated allowed browser origins.
 - `EXA_API_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` — required together to trigger manual research; startup remains available without them.
 - `OPENROUTER_MAX_OUTPUT_TOKENS=4096` — maximum completion-token budget for draft generation; token-limited completions are rejected rather than saved as partial JSON.
-- `AGENT_SCHEDULER_ENABLED=false` — reserved scheduler flag; scheduling is currently disabled.
+- `AGENT_SCHEDULER_ENABLED=false` — enables automatic research only when set to `true`. It is disabled by default and uses Exa/OpenRouter credits when enabled.
 - `AGENT_RUN_TIMEOUT=2m` — total time limit for one manually triggered research run.
 - `AGENT_QUEUE_CAPACITY=8` — bounded number of queued runs awaiting the single worker.
 
@@ -43,7 +43,7 @@ Physical phones cannot reach a computer backend through `localhost`. Set `EXPO_P
 
 ## API status
 
-Implemented: `GET /health`, `GET /api/v1/agents`, `GET /api/v1/agents/{id}/messages`, and `POST /api/v1/agents/{id}/runs`. A configured manual run uses Exa evidence and OpenRouter structured output, then saves sourced drafts to SQLite. It is asynchronous; poll the agent and conversation APIs after receiving `202`.
+Implemented: `GET /health`, `GET /api/v1/agents`, `GET /api/v1/agents/{id}/messages`, `POST /api/v1/agents/{id}/runs`, and `PATCH /api/v1/drafts/{id}`. A configured manual run uses Exa evidence and OpenRouter structured output, then saves sourced drafts to SQLite. It is asynchronous; poll the agent and conversation APIs after receiving `202`.
 
 ```sh
 curl -X POST http://localhost:8080/api/v1/agents/premier_league/runs
@@ -51,7 +51,30 @@ curl http://localhost:8080/api/v1/agents
 curl http://localhost:8080/api/v1/agents/premier_league/messages
 ```
 
-Each run starts with a current UTC date and a seven-day recent-news window, is limited to two Exa searches, five results per search, three model calls, two drafts, and `AGENT_RUN_TIMEOUT`. Source URLs are normalized for basic exact-repeat detection and recent story summaries are supplied to the model; this does not guarantee semantic deduplication. X text is validated with an approximate 280-Unicode-character limit. Posting editorial messages and patching drafts remain deferred.
+Each run starts with a current UTC date and a seven-day recent-news window, is limited to two Exa searches, five results per search, three model calls, two drafts, and `AGENT_RUN_TIMEOUT`. Source URLs are normalized for basic exact-repeat detection and recent story summaries are supplied to the model; this does not guarantee semantic deduplication. X text is validated with an approximate 280-Unicode-character limit. Posting editorial messages remains deferred.
+
+## Automatic research scheduling
+
+Set `AGENT_SCHEDULER_ENABLED=true` to enable automatic runs. The scheduler uses the existing single queue and respects each enabled agent's `research_interval_seconds`; it stores the next due time in SQLite, so restarts do not run every assignment immediately. A new enabled assignment is first scheduled one interval ahead, with a small stagger between assignments. Manual “Check now” runs remain available and reset that assignment's next automatic attempt after completion or failure. Active assignments and a full queue are skipped without creating another run.
+
+Automatic research spends Exa and OpenRouter credits. Do not enable it for ordinary development.
+
+To make a live, credit-spending check of one agent, first stop the API and record its current settings. This example temporarily enables only `premier_league` with a two-minute interval, clears only its schedule state so its first automatic run is two minutes ahead, then restores the normal seeded settings:
+
+```sh
+cd backend
+sqlite3 data/newsroom.db "SELECT id, enabled, research_interval_seconds FROM agents ORDER BY id;"
+sqlite3 data/newsroom.db "UPDATE agents SET enabled=0; UPDATE agents SET enabled=1, research_interval_seconds=120 WHERE id='premier_league'; DELETE FROM agent_schedules WHERE agent_id='premier_league';"
+AGENT_SCHEDULER_ENABLED=true go run ./cmd/api
+
+# In another terminal, wait a little over two minutes, then inspect results:
+curl -sS http://localhost:8080/api/v1/agents/premier_league/messages
+
+# Stop the API, then restore the seeded enabled flags and normal 30-minute interval:
+sqlite3 data/newsroom.db "UPDATE agents SET enabled=1, research_interval_seconds=1800;"
+```
+
+If your database has customized enabled flags or intervals, restore the values recorded by the first command instead of the seeded defaults.
 
 ## Exa research check
 

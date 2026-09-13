@@ -25,6 +25,73 @@ var (
 
 type repository struct{ db *sql.DB }
 
+// ensureSchedules creates durable first-run times for enabled assignments that
+// do not have one yet. The small deterministic spacing prevents a newly
+// enabled set of agents from entering the single worker at the same instant.
+func (r repository) ensureSchedules(now time.Time) error {
+	rows, err := r.db.Query(`SELECT id, research_interval_seconds FROM agents WHERE enabled=1 ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	type scheduledAgent struct {
+		id              string
+		intervalSeconds int
+	}
+	var agents []scheduledAgent
+	for rows.Next() {
+		var agentID string
+		var intervalSeconds int
+		if err := rows.Scan(&agentID, &intervalSeconds); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		agents = append(agents, scheduledAgent{id: agentID, intervalSeconds: intervalSeconds})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for index, agent := range agents {
+		next := now.UTC().Add(time.Duration(agent.intervalSeconds)*time.Second + time.Duration(index)*5*time.Second)
+		_, err := r.db.Exec(`INSERT INTO agent_schedules (agent_id,next_run_at,updated_at) VALUES (?,?,?) ON CONFLICT(agent_id) DO NOTHING`, agent.id, next.Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r repository) dueScheduledAgents(now time.Time) ([]string, error) {
+	rows, err := r.db.Query(`SELECT s.agent_id FROM agent_schedules s JOIN agents a ON a.id=s.agent_id WHERE a.enabled=1 AND s.next_run_at<=? ORDER BY s.next_run_at ASC, s.agent_id ASC`, now.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var agentIDs []string
+	for rows.Next() {
+		var agentID string
+		if err := rows.Scan(&agentID); err != nil {
+			return nil, err
+		}
+		agentIDs = append(agentIDs, agentID)
+	}
+	return agentIDs, rows.Err()
+}
+
+func (r repository) scheduleNext(agentID string, now time.Time) error {
+	var intervalSeconds int
+	err := r.db.QueryRow(`SELECT research_interval_seconds FROM agents WHERE id=?`, agentID).Scan(&intervalSeconds)
+	if err != nil {
+		return err
+	}
+	next := now.UTC().Add(time.Duration(intervalSeconds) * time.Second)
+	_, err = r.db.Exec(`UPDATE agent_schedules SET next_run_at=?, updated_at=? WHERE agent_id=?`, next.Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano), agentID)
+	return err
+}
+
 func (r repository) createQueuedRun(agentID string) (runRecord, error) {
 	var exists int
 	if err := r.db.QueryRow(`SELECT COUNT(*) FROM agents WHERE id = ?`, agentID).Scan(&exists); err != nil {
@@ -223,16 +290,24 @@ type runQueue struct {
 	wg         sync.WaitGroup
 	log        *slog.Logger
 	configured bool
+	scheduling bool
+	now        func() time.Time
 	mu         sync.Mutex
 	stopped    bool
 }
 
 func newRunQueue(parent context.Context, repo repository, workflow agent.Workflow, timeout time.Duration, capacity int, configured bool, log *slog.Logger) *runQueue {
 	ctx, cancel := context.WithCancel(parent)
-	q := &runQueue{repo: repo, workflow: workflow, timeout: timeout, jobs: make(chan runRecord, capacity), slots: make(chan struct{}, capacity), ctx: ctx, cancel: cancel, log: log, configured: configured}
+	q := &runQueue{repo: repo, workflow: workflow, timeout: timeout, jobs: make(chan runRecord, capacity), slots: make(chan struct{}, capacity), ctx: ctx, cancel: cancel, log: log, configured: configured, now: time.Now}
 	q.wg.Add(1)
 	go q.worker()
 	return q
+}
+
+func (q *runQueue) enableScheduling() {
+	q.mu.Lock()
+	q.scheduling = true
+	q.mu.Unlock()
 }
 
 func (q *runQueue) enqueue(agentID string) (runRecord, error) {
@@ -293,7 +368,22 @@ func (q *runQueue) process(run runRecord) {
 		q.log.Error("research run failed", "run_id", run.ID, "error", err)
 		if markErr := q.repo.markFailed(run.ID); markErr != nil {
 			q.log.Error("mark run failed", "run_id", run.ID, "error", markErr)
+			return
 		}
+	}
+	q.scheduleFollowingRun(run.AgentID)
+}
+
+func (q *runQueue) scheduleFollowingRun(agentID string) {
+	q.mu.Lock()
+	scheduling := q.scheduling
+	now := q.now
+	q.mu.Unlock()
+	if !scheduling {
+		return
+	}
+	if err := q.repo.scheduleNext(agentID, now()); err != nil {
+		q.log.Error("schedule next research run", "agent_id", agentID, "error", err)
 	}
 }
 func (q *runQueue) stop(ctx context.Context) {
@@ -310,7 +400,9 @@ func (q *runQueue) stop(ctx context.Context) {
 	for {
 		select {
 		case run := <-q.jobs:
-			_ = q.repo.markFailed(run.ID)
+			if err := q.repo.markFailed(run.ID); err == nil {
+				q.scheduleFollowingRun(run.AgentID)
+			}
 		case <-time.After(1 * time.Millisecond):
 			return
 		}
