@@ -1,0 +1,8 @@
+import { Agent, Draft, Message } from '../types/api';
+export const demoAgents: Agent[] = [
+  { id:'premier_league', assignment:'Premier League news', language:'fr', platforms:['facebook','x'], enabled:true, researchIntervalSeconds:1800, pendingDraftCount:1, isRunning:false, createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+  { id:'bundesliga', assignment:'Bundesliga transfers', language:'fr', platforms:['facebook','x'], enabled:true, researchIntervalSeconds:1800, pendingDraftCount:0, isRunning:false, createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+  { id:'coach_statements', assignment:'Coach statements', language:'fr', platforms:['facebook','x'], enabled:true, researchIntervalSeconds:1800, pendingDraftCount:0, isRunning:false, createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+];
+const demoDraft: Draft = { id:'demo-draft-1', agentId:'premier_league', storyId:'demo-story-1', runId:'demo-run-1', headline:'Démo fictive : le newsroom est prêt', claimStatus:'unverified', facebookText:'Ceci est un exemple fictif pour prévisualiser une publication Facebook.', xText:'Exemple fictif — aucune actualité réelle.', reviewStatus:'pending', sources:[], createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' };
+export const demoMessages: Record<string, Message[]> = { premier_league:[{id:'demo-message-1',agentId:'premier_league',role:'assistant',messageType:'draft',text:'Démo fictive : une conversation apparaîtra ici.',draftId:demoDraft.id,runId:demoDraft.runId,createdAt:'2026-01-01T00:00:00Z',draft:demoDraft}], bundesliga:[], coach_statements:[] };
