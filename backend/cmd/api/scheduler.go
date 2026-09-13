@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const schedulerTick = time.Minute
+const schedulerTick = 30 * time.Second
 
 // scheduler only decides when an assignment may enter the existing queue. It
 // never calls providers or runs research itself.

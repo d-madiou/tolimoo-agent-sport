@@ -234,9 +234,14 @@ func migrate(db *sql.DB) error {
 
 func seed(db *sql.DB) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	agents := []struct{ id, assignment string }{{"premier_league", "Premier League news"}, {"bundesliga", "Bundesliga transfers"}, {"coach_statements", "Coach statements"}}
+	agents := []struct{ id, assignment string }{{"premier_league", "Premier League news"}, {"bundesliga", "Bundesliga transfers"}, {"coach_statements", "Coach statements"}, {"all_sports", "Recent major sports news across football, basketball, tennis, Formula 1, and other leading competitions"}}
 	for _, a := range agents {
-		_, err := db.Exec(`INSERT INTO agents (id, assignment, language, platforms, enabled, research_interval_seconds, created_at, updated_at) VALUES (?, ?, 'fr', '["facebook","x"]', 1, 60, ?, ?) ON CONFLICT(id) DO NOTHING`, a.id, a.assignment, now, now)
+		enabled, interval := 1, 60
+		if a.id == "all_sports" {
+			enabled = 0
+			interval = 30
+		}
+		_, err := db.Exec(`INSERT INTO agents (id, assignment, language, platforms, enabled, research_interval_seconds, created_at, updated_at) VALUES (?, ?, 'fr', '["facebook","x"]', ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`, a.id, a.assignment, enabled, interval, now, now)
 		if err != nil {
 			return err
 		}
@@ -544,8 +549,8 @@ func (a *api) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid_request", "enabled must be a boolean.")
 		return
 	}
-	if value, ok := raw["researchIntervalSeconds"]; ok && (json.Unmarshal(value, &interval) != nil || interval < 60 || interval > 86400) {
-		jsonError(w, http.StatusBadRequest, "invalid_request", "researchIntervalSeconds must be between 60 and 86400.")
+	if value, ok := raw["researchIntervalSeconds"]; ok && (json.Unmarshal(value, &interval) != nil || interval < 30 || interval > 86400) {
+		jsonError(w, http.StatusBadRequest, "invalid_request", "researchIntervalSeconds must be between 30 and 86400.")
 		return
 	}
 	encoded, _ := json.Marshal(platforms)
@@ -691,8 +696,8 @@ func (a *api) applyAgentPatch(agentID string, patch agentPatch) (map[string]any,
 		}
 	}
 	if patch.interval != nil {
-		if err := json.Unmarshal(*patch.interval, &interval); err != nil || interval < 60 || interval > 86400 {
-			return nil, fmt.Errorf("researchIntervalSeconds must be between 60 and 86400")
+		if err := json.Unmarshal(*patch.interval, &interval); err != nil || interval < 30 || interval > 86400 {
+			return nil, fmt.Errorf("researchIntervalSeconds must be between 30 and 86400")
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -805,7 +810,7 @@ func (a *api) draftPayload(draftID string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := a.db.Query(`SELECT id, url, title, published_at, retrieved_at FROM sources WHERE story_id=? ORDER BY id`, storyID)
+	rows, err := a.db.Query(`SELECT id, url, title, image_url, published_at, retrieved_at FROM sources WHERE story_id=? ORDER BY id`, storyID)
 	if err != nil {
 		return nil, err
 	}
@@ -813,11 +818,14 @@ func (a *api) draftPayload(draftID string) (map[string]any, error) {
 	sources := []map[string]any{}
 	for rows.Next() {
 		var sourceID, sourceURL, sourceTitle, retrievedAt string
-		var publishedAt sql.NullString
-		if err := rows.Scan(&sourceID, &sourceURL, &sourceTitle, &publishedAt, &retrievedAt); err != nil {
+		var imageURL, publishedAt sql.NullString
+		if err := rows.Scan(&sourceID, &sourceURL, &sourceTitle, &imageURL, &publishedAt, &retrievedAt); err != nil {
 			return nil, err
 		}
-		source := map[string]any{"id": sourceID, "url": sourceURL, "title": sourceTitle, "publishedAt": nil, "retrievedAt": retrievedAt}
+		source := map[string]any{"id": sourceID, "url": sourceURL, "title": sourceTitle, "imageUrl": nil, "publishedAt": nil, "retrievedAt": retrievedAt}
+		if imageURL.Valid {
+			source["imageUrl"] = imageURL.String
+		}
 		if publishedAt.Valid {
 			source["publishedAt"] = publishedAt.String
 		}

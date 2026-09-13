@@ -47,6 +47,7 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]domain.
 		"contents": map[string]any{
 			"highlights": map[string]any{"query": query, "maxCharacters": 1200},
 			"text":       map[string]any{"maxCharacters": 4000},
+			"extras":     map[string]any{"imageLinks": 1},
 		},
 	}
 	payload, err := json.Marshal(body)
@@ -74,7 +75,11 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]domain.
 		if len(result.Highlights) > 0 {
 			content = strings.Join(result.Highlights, "\n") + "\n" + content
 		}
-		results = append(results, domain.SourceEvidence{URL: result.URL, Title: result.Title, PublishedAt: publishedAt, RetrievedAt: time.Now().UTC(), Content: truncate(content, 6000)})
+		imageURL := result.Image
+		if imageURL == "" && len(result.Extras.ImageLinks) > 0 {
+			imageURL = result.Extras.ImageLinks[0]
+		}
+		results = append(results, domain.SourceEvidence{URL: result.URL, Title: result.Title, ImageURL: imageURL, PublishedAt: publishedAt, RetrievedAt: time.Now().UTC(), Content: truncate(content, 6000)})
 		if len(results) == limit {
 			break
 		}
@@ -84,8 +89,11 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]domain.
 
 type searchResponse struct {
 	Results []struct {
-		Title, URL, PublishedDate, Text string
-		Highlights                      []string
+		Title, URL, PublishedDate, Text, Image string
+		Highlights                             []string
+		Extras                                 struct {
+			ImageLinks []string `json:"imageLinks"`
+		} `json:"extras"`
 	} `json:"results"`
 }
 

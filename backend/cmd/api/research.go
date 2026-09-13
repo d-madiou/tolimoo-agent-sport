@@ -229,7 +229,7 @@ func (r repository) completeRun(run runRecord, result agent.Result) error {
 		}
 		for _, sourceID := range draft.SourceIDs {
 			source := result.Sources[sourceID]
-			if _, err := tx.Exec(`INSERT INTO sources (id,story_id,url,title,published_at,retrieved_at) VALUES (?,?,?,?,?,?)`, newID("src"), storyID, source.URL, source.Title, nullableTime(source.PublishedAt), source.RetrievedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			if _, err := tx.Exec(`INSERT INTO sources (id,story_id,url,title,image_url,published_at,retrieved_at) VALUES (?,?,?,?,?,?,?)`, newID("src"), storyID, source.URL, source.Title, nullableString(source.ImageURL), nullableTime(source.PublishedAt), source.RetrievedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 				return rollback(err)
 			}
 		}
@@ -258,6 +258,12 @@ func nullableTime(value *time.Time) any {
 		return nil
 	}
 	return value.UTC().Format(time.RFC3339Nano)
+}
+func nullableString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
 }
 func normalizeURL(raw string) string {
 	return strings.TrimRight(strings.ToLower(strings.TrimSpace(raw)), "/")

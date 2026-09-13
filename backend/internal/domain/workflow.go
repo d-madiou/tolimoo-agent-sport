@@ -7,6 +7,7 @@ type SourceEvidence struct {
 	ID             string
 	URL            string
 	Title          string
+	ImageURL       string
 	PublishedAt    *time.Time
 	RetrievedAt    time.Time
 	Content        string

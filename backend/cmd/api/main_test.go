@@ -34,7 +34,7 @@ func testDatabase(t *testing.T) *sql.DB {
 
 func TestFreshDatabasePragmasAndIdempotentSeed(t *testing.T) {
 	db := testDatabase(t)
-	assertAgentCount(t, db, 3)
+	assertAgentCount(t, db, 4)
 
 	var foreignKeys, busyTimeout int
 	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
@@ -60,10 +60,10 @@ func TestFreshDatabasePragmasAndIdempotentSeed(t *testing.T) {
 	if err := seed(db); err != nil {
 		t.Fatal(err)
 	}
-	assertAgentCount(t, db, 3)
+	assertAgentCount(t, db, 4)
 }
 
-func TestRestartPreservesExactlyThreeSeededAgents(t *testing.T) {
+func TestRestartPreservesExactlyFourSeededAgents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "newsroom.db")
 	db, err := openDatabase(path)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestRestartPreservesExactlyThreeSeededAgents(t *testing.T) {
 	if err := seed(db); err != nil {
 		t.Fatal(err)
 	}
-	assertAgentCount(t, db, 3)
+	assertAgentCount(t, db, 4)
 }
 
 func TestReadAPIs(t *testing.T) {
@@ -116,8 +116,8 @@ func TestReadAPIs(t *testing.T) {
 		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
 		}
-		if len(body.Agents) != 3 {
-			t.Fatalf("agent count = %d, want 3", len(body.Agents))
+		if len(body.Agents) != 4 {
+			t.Fatalf("agent count = %d, want 4", len(body.Agents))
 		}
 	})
 	t.Run("new conversation is empty", func(t *testing.T) {
@@ -262,7 +262,7 @@ func TestPatchAgentUpdatesAssignmentAndConfiguration(t *testing.T) {
 	if body.Agent.Assignment != "LaLiga news" || body.Agent.Language != "en" || body.Agent.Enabled || len(body.Agent.Platforms) != 1 || body.Agent.Platforms[0] != "x" || body.Agent.Interval != 300 {
 		t.Fatalf("unexpected agent update: %+v", body.Agent)
 	}
-	bad := request(t, handler, http.MethodPatch, "/api/v1/agents/premier_league", `{"researchIntervalSeconds":59}`)
+	bad := request(t, handler, http.MethodPatch, "/api/v1/agents/premier_league", `{"researchIntervalSeconds":29}`)
 	if bad.Code != http.StatusBadRequest {
 		t.Fatalf("invalid interval status = %d", bad.Code)
 	}
