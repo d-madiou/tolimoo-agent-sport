@@ -30,7 +30,7 @@ Enums: run status `queued | running | completed | failed`; draft review status `
 {"assignment":"LaLiga news","enabled":true,"platforms":["facebook","x"],"researchIntervalSeconds":60}
 ```
 
-`assignment` must be nonblank, `language` supports `"fr"` (French) and `"en"` (English), platforms are unique values from `facebook | x`, and `researchIntervalSeconds` must be between 60 and 86400. The response is `{"agent":{...}}`. The language controls future model-generated drafts; existing saved drafts are unchanged. `enabled:false` pauses future automatic scheduling but does not cancel a run already in progress; manual research remains available.
+`assignment` must be nonblank, `language` supports `"fr"` (French) and `"en"` (English), platforms are unique values from `facebook | x`, and `researchIntervalSeconds` must be between 30 and 86400. The response is `{"agent":{...}}`. The language controls future model-generated drafts; existing saved drafts are unchanged. `enabled:false` pauses future automatic scheduling but does not cancel a run already in progress; manual research remains available.
 
 `POST /api/v1/agents` creates a reporter and returns `201`. New reporters are discovered by the enabled scheduler on its next tick; their first automatic run is one interval ahead. Required fields are `id` (3–64 lowercase letters, numbers, or underscores) and a nonblank `assignment`. Optional settings use the same validation as PATCH and default to `language:"fr"`, both platforms, enabled, and a 60-second interval. Existing reporters keep their stored interval until explicitly updated:
 
@@ -44,7 +44,7 @@ If messages exist, the response is:
 {"messages":[{"id":"message-1","agentId":"premier_league","role":"assistant","messageType":"draft","text":"Texte…","draftId":"draft-1","runId":null,"createdAt":"2026-01-01T00:00:00Z"}]}
 ```
 
-For a persisted draft message, an additive `draft` object is included with `id`, `agentId`, `storyId`, `runId`, `headline`, `claimStatus`, `facebookText`, `xText`, `reviewStatus`, `sources`, `createdAt`, and `updatedAt`. Sources have `id`, `url`, `title`, nullable `publishedAt`, and `retrievedAt`. Nullable fields are emitted as JSON `null`.
+For a persisted draft message, an additive `draft` object is included with `id`, `agentId`, `storyId`, `runId`, `headline`, `claimStatus`, `facebookText`, `xText`, `reviewStatus`, `sources`, `createdAt`, and `updatedAt`. Sources have `id`, `url`, `title`, nullable `imageUrl`, nullable `publishedAt`, and `retrievedAt`. `imageUrl` is an untrusted remote URL supplied by the source page when Exa has one; clients must use a visual fallback when it is `null`. Nullable fields are emitted as JSON `null`.
 
 An unknown agent returns `404`:
 

@@ -55,7 +55,7 @@ Each run starts with a current UTC date and a seven-day recent-news window, is l
 
 ## Automatic research scheduling
 
-Set `AGENT_SCHEDULER_ENABLED=true` to enable automatic runs. The scheduler checks for due work once per minute, uses the existing single queue, and respects each enabled agent's `research_interval_seconds`; it stores the next due time in SQLite, so restarts do not run every assignment immediately. New reporters and fresh databases default to a 60-second interval; existing reporters retain their saved interval until updated. A new enabled assignment is first scheduled one interval ahead, with a small stagger between assignments. Manual “Check now” runs remain available and reset that assignment's next automatic attempt after completion or failure. Active assignments and a full queue are skipped without creating another run.
+Set `AGENT_SCHEDULER_ENABLED=true` to enable automatic runs. The scheduler checks for due work every 30 seconds, uses the existing single queue, and respects each enabled agent's `research_interval_seconds`; it stores the next due time in SQLite, so restarts do not run every assignment immediately. The All Sports reporter defaults to a 30-second interval when first created; new standard reporters and fresh seeded reporters default to 60 seconds. Existing reporters retain their saved interval until updated. A new enabled assignment is first scheduled one interval ahead, with a small stagger between assignments. Manual “Check now” runs remain available and reset that assignment's next automatic attempt after completion or failure. Active assignments and a full queue are skipped without creating another run.
 
 Automatic research spends Exa and OpenRouter credits. Do not enable it for ordinary development.
 
